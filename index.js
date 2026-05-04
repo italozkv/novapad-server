@@ -104,6 +104,7 @@ async function upsertUserRecord({ name, email, passwordHash, avatarUrl = null } 
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const normalizedPasswordHash = String(passwordHash || '').trim();
   const normalizedAvatarUrl = avatarUrl == null ? null : String(avatarUrl).trim() || null;
+  const userId = crypto.randomUUID();
 
   if (!normalizedName) throw new Error('name is required.');
   if (!normalizedEmail) throw new Error('email is required.');
@@ -111,27 +112,27 @@ async function upsertUserRecord({ name, email, passwordHash, avatarUrl = null } 
 
   if (USE_POSTGRES) {
     const result = await pgPool.query(`
-      INSERT INTO users (name, email, password_hash, avatar_url, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, now()::text, now()::text)
+      INSERT INTO users (id, name, email, password_hash, avatar_url, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, now()::text, now()::text)
       ON CONFLICT (email) DO UPDATE SET
         name = EXCLUDED.name,
         password_hash = EXCLUDED.password_hash,
         avatar_url = EXCLUDED.avatar_url,
         updated_at = now()::text
       RETURNING id, name, email, created_at, updated_at
-    `, [normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
+    `, [userId, normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
     return result.rows[0] || null;
   }
 
   await dbRun(`
-    INSERT INTO users (name, email, password_hash, avatar_url)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO users (id, name, email, password_hash, avatar_url)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       name = excluded.name,
       password_hash = excluded.password_hash,
       avatar_url = excluded.avatar_url,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `, [normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
+  `, [userId, normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
 
   return dbGet('SELECT id, name, email, created_at, updated_at FROM users WHERE email = ?', [normalizedEmail]);
 }
