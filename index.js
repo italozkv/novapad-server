@@ -522,7 +522,7 @@ function createApp() {
     res.json({ success: true, data: { ok: true, time: nowIso(), database: USE_POSTGRES ? 'postgres' : 'sqlite' } });
   });
 
-  app.post('/users/register', limiter, requireAppKey, wrapAsync(async (req, res) => {
+  app.post('/users/register', limiter, wrapAsync(async (req, res) => {
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
     const created = await upsertUserRecord({
       name: payload.name,
