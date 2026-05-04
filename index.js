@@ -88,6 +88,54 @@ async function dbRun(sql, params = []) {
   return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
 }
 
+function publicUserRow(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    created_at: user.created_at || null,
+    updated_at: user.updated_at || null,
+  };
+}
+
+async function upsertUserRecord({ name, email, passwordHash, avatarUrl = null } = {}) {
+  const normalizedName = String(name || '').trim();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedPasswordHash = String(passwordHash || '').trim();
+  const normalizedAvatarUrl = avatarUrl == null ? null : String(avatarUrl).trim() || null;
+
+  if (!normalizedName) throw new Error('name is required.');
+  if (!normalizedEmail) throw new Error('email is required.');
+  if (!normalizedPasswordHash) throw new Error('passwordHash is required.');
+
+  if (USE_POSTGRES) {
+    const result = await pgPool.query(`
+      INSERT INTO users (name, email, password_hash, avatar_url, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, now()::text, now()::text)
+      ON CONFLICT (email) DO UPDATE SET
+        name = EXCLUDED.name,
+        password_hash = EXCLUDED.password_hash,
+        avatar_url = EXCLUDED.avatar_url,
+        updated_at = now()::text
+      RETURNING id, name, email, created_at, updated_at
+    `, [normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
+    return result.rows[0] || null;
+  }
+
+  await dbRun(`
+    INSERT INTO users (name, email, password_hash, avatar_url)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET
+      name = excluded.name,
+      password_hash = excluded.password_hash,
+      avatar_url = excluded.avatar_url,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  `, [normalizedName, normalizedEmail, normalizedPasswordHash, normalizedAvatarUrl]);
+
+  return dbGet('SELECT id, name, email, created_at, updated_at FROM users WHERE email = ?', [normalizedEmail]);
+}
+
 async function initPostgres() {
   const { Pool } = require('pg');
   pgPool = new Pool({
@@ -134,6 +182,16 @@ async function initPostgres() {
       enabled INTEGER NOT NULL DEFAULT 1,
       value TEXT,
       UNIQUE(license_id, feature_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT,
+      avatar_url TEXT,
+      created_at TEXT NOT NULL DEFAULT now()::text,
+      updated_at TEXT NOT NULL DEFAULT now()::text
     );
 
     CREATE INDEX IF NOT EXISTS idx_licenses_key_hash ON licenses(license_key_hash);
@@ -189,6 +247,16 @@ function initSqlite() {
       enabled INTEGER NOT NULL DEFAULT 1,
       value TEXT,
       UNIQUE(license_id, feature_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT,
+      avatar_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
   `);
 }
@@ -447,6 +515,25 @@ function createApp() {
   app.get('/health', (_req, res) => {
     res.json({ success: true, data: { ok: true, time: nowIso(), database: USE_POSTGRES ? 'postgres' : 'sqlite' } });
   });
+
+  app.post('/users/register', limiter, requireAppKey, wrapAsync(async (req, res) => {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const created = await upsertUserRecord({
+      name: payload.name,
+      email: payload.email,
+      passwordHash: payload.password_hash || payload.passwordHash,
+      avatarUrl: payload.avatar_url || payload.avatarUrl || null,
+    });
+
+    if (!created) {
+      return res.status(500).json({ success: false, error: 'Unable to save user.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: { user: publicUserRow(created) },
+    });
+  }));
 
   app.post('/license/validate', wrapAsync(async (req, res) => {
     const licenseKeyHash = validateLicenseInput(req, res);
