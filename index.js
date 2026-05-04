@@ -200,6 +200,11 @@ async function initPostgres() {
     CREATE INDEX IF NOT EXISTS idx_license_devices_fingerprint ON license_devices(device_fingerprint);
     CREATE INDEX IF NOT EXISTS idx_entitlements_license_id ON entitlements(license_id);
   `);
+
+  await pgPool.query(`
+    ALTER TABLE IF EXISTS users
+      ADD COLUMN IF NOT EXISTS avatar_url TEXT
+  `);
 }
 
 function initSqlite() {
